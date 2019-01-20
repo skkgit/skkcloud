@@ -1,0 +1,52 @@
+#!/bin/sh
+#
+# install -- Install docker engine
+#
+# ref: https://docs.docker.com/engine/installation/linux/ubuntulinux/
+#
+# ref: https://jpetazzo.github.io/2014/01/29/docker-device-mapper-resize/
+#
+
+which docker > /dev/null 2>&1 && exit 0
+
+[ -f /etc/issue ] && grep -qi ubuntu /etc/issue
+if [ $? -eq 0 ]; then
+    echo "LOG: Install docker-ce with $0"
+else
+    echo "LOG: Please install docker-ce with doc: https://docs.docker.com/engine/installation/linux/docker-ce/ubuntu/"
+    exit 1
+fi
+
+# Install docker-engine for Ubuntu
+
+[ `id -u` -ne 0 ] && SUDO=sudo
+
+$SUDO curl -fsSL http://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg | sudo apt-key add -
+ubuntu_version=$(lsb_release -cs)
+$SUDO apt-get install -y software-properties-common
+$SUDO add-apt-repository "deb [arch=amd64] http://mirrors.aliyun.com/docker-ce/linux/ubuntu $ubuntu_version stable"
+$SUDO apt-get -y update
+$SUDO apt-get -y install apt-transport-https ca-certificates
+$SUDO apt-get -y install bridge-utils
+[ "$ubuntu_version" = "trusty" ] && $SUDO apt-get -y install linux-image-extra-$(uname -r) linux-image-extra-virtual
+$SUDO apt-get -y --force-yes install docker-ce
+$SUDO usermod -aG docker $USER
+
+# The --bip works like https://gist.github.com/ismell/6689836
+$SUDO sed -i -e "/DOCKER HACK START 578327498237/,/DOCKER HACK END 789527394722/d" /etc/default/docker
+$SUDO bash -c 'cat <<EOF >> /etc/default/docker
+# CLOUD LAB: DOCKER HACK START 578327498237
+# DOCKER_OPTS="\$DOCKER_OPTS --insecure-registry registry.mirrors.aliyuncs.com"
+#DOCKER_OPTS="\$DOCKER_OPTS --registry-mirror https://xxx.mirror.aliyuncs.com"
+DOCKER_OPTS="\$DOCKER_OPTS --registry-mirror=https://docker.mirrors.ustc.edu.cn"
+# DOCKER_OPTS="\$DOCKER_OPTS --dns 119.29.29.29 --dns 180.76.76.76"
+# DOCKER_OPTS="\$DOCKER_OPTS --dns 223.5.5.5 --dns 114.114.114.114"
+# DOCKER_OPTS="\$DOCKER_OPTS --dns 8.8.8.8 --dns 8.8.4.4"
+DOCKER_OPTS="\$DOCKER_OPTS --bip=10.66.0.10/16"
+DOCKER_OPTS="\$DOCKER_OPTS --storage-opt dm.basesize=5G"
+# CLOUD LAB: DOCKER HACK END 789527394722
+EOF'
+# Restart to make sure the above opts work
+$SUDO ifconfig docker0 down
+$SUDO brctl delbr docker0
+$SUDO service docker restart

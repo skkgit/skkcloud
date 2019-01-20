@@ -1,0 +1,29 @@
+#!/bin/sh
+#
+# ssh -- login the docker lab via ssh
+#
+
+TOP_DIR=$(cd $(dirname $0)/../../ && pwd)
+. $TOP_DIR/tools/docker/config $* >/dev/null
+
+SSH_CMD="ssh ${UNIX_USER}@${VNC_IP} -p ${CONTAINER_SSH_PORT}"
+REMOTE_SSH_CMD="ssh ${UNIX_USER}@${HOST} -p ${HOST_SSH_PORT}"
+
+cat <<EOF
+LOG: Upload public ssh key with following steps:
+
+        $ mkdir ~/.ssh/
+        $ touch ~/.ssh/authorized_keys
+        $ chmod 700 ~/.ssh/
+        $ chmod 644 ~/.ssh/authorized_keys
+        $ vim ~/.ssh/authorized_keys
+
+        Generate a public ssh key with 'ssh-keygen'
+        Copy your public ssh key and paste it into the ~/.ssh/authorized_key
+
+EOF
+
+echo "LOG: Remote, Please login with '$REMOTE_SSH_CMD' with '$UNIX_PWD'\n"
+echo "LOG: Local, Please login with '$SSH_CMD' with '$UNIX_PWD' and enter workdir: $LAB_WORKDIR\n"
+
+eval $SSH_CMD

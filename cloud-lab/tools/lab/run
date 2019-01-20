@@ -1,0 +1,190 @@
+#!/bin/bash
+
+# no argument required of config for container
+IN_CONTAINER=1
+
+# NOTE: for Security, variables should be passed as environment variables
+. /tools/docker/config >/dev/null
+
+do_unlock
+
+# Don't touch me
+DEF_USER=ubuntu
+[ -z "$UNIX_USER" ] && get_var UNIX_USER $DEF_USER
+
+get_var HOST_NAME localhost
+get_var UNIX_IDENTIFY $DEF_UNIX_IDENTIFY
+get_var SUDO_IDENTIFY $DEF_SUDO_IDENTIFY
+get_var UNIX_UID 1000
+
+[ "x$UNIX_UID" = "x0" ] && UNIX_UID=1000
+set_var UNIX_UID
+
+[ -z "$VNC_IP" ] && get_var VNC_IP $DEF_VNC_IP
+[ -z "$VNC_TOKEN" ] && get_var VNC_TOKEN ""
+[ -z "$ROUTE_IP" ] && ROUTE_IP=$(route -n | grep "^0.0.0.0" | tr -s ' ' | cut -d' ' -f2)
+
+IFACE=$(ifconfig | head -1 | cut -d' ' -f1)
+if [ "$VNC_IP" != "$DEF_VNC_IP" ]; then
+  ifconfig $IFACE $VNC_IP up
+  _ROUTE_IP=$(route -n | grep "^0.0.0.0" | tr -s ' ' | cut -d' ' -f2)
+  [ -z "$_ROUTE_IP" ] && route add default gw $ROUTE_IP $IFACE
+else
+  VNC_IP=`ifconfig $IFACE | awk '/inet addr/{print substr($2,6)}'`
+fi
+
+[ -n "$VNC_IP" -a -z "$VNC_TOKEN" ] && VNC_TOKEN=`echo -n $VNC_IP | tr -d '\n' | $ENCRYPT_CMD | cut -d' ' -f1 | cut -c1-$TOKEN_LENGTH`
+[ -n "$VNC_IP" ] && set_var VNC_IP
+[ -n "$VNC_TOKEN" ] && set_var VNC_TOKEN
+
+do_lock
+
+# create a ubuntu user
+
+HOME=/home/$UNIX_USER
+CREATE_FLAG=/create_flag
+BACKUP_FLAG=/backup_flag
+
+if [ -d $HOME -a ! -f $CREATE_FLAG ]; then
+  echo "LOG: Backup old home"
+  mkdir -p /tmp/backup/
+  mv $HOME/* /tmp/backup/
+  touch $BACKUP_FLAG
+fi
+
+if [ ! -f $CREATE_FLAG ]; then
+  # Touch a flag
+  touch $CREATE_FLAG
+
+  # Update PS1 of the TERM
+  bash -c "sed -i -e 's%PS1=.*$%PS1=\"$UNIX_USER@$IMAGE\$ \"%g' /etc/skel/.bashrc"
+
+  DEF_HOME=/home/$DEF_USER
+  DEF_SYSTEM_SUDOERS_USER=/etc/sudoers.d/$DEF_USER
+  DESKTOP=$HOME/Desktop/
+
+  [ $SUDO_IDENTIFY -ge 1 ] && UNIX_USER_GROUPS="--groups adm,sudo"
+  [ $SUDO_IDENTIFY -eq 0 ] && UNIX_USER_GROUPS=""
+
+  # The old one should be removed before create a new one
+  id -u $UNIX_USER &>/dev/null && userdel -f -r $UNIX_USER
+
+  useradd --uid $UNIX_UID --create-home --shell /bin/bash --user-group $UNIX_USER_GROUPS $UNIX_USER
+
+  # Restore the backuped home
+  if [ -f $BACKUP_FLAG ]; then
+    echo "LOG: Restore old home"
+    mv /tmp/backup/* $HOME/
+    chown $UNIX_USER:$UNIX_USER -R $HOME/
+    rm -rf /tmp/backup
+  fi
+
+  # Install more system configuration files
+  [ ! -d $DESKTOP ] && mkdir $DESKTOP
+
+  for system in $CONFIG_SYSTEM_DIR $CORE_SYSTEM_DIR
+  do
+    for f in `find $system -type f | sed -e "s%$system%%g"`
+    do
+      d=$(echo $f | sed -e "s%$DEF_HOME%$HOME%g")
+      dest=`dirname $d`
+      [ ! -d $dest ] && mkdir -p $dest
+      cp $system/$f $d
+    done
+  done
+
+  SYSTEM_SUDOERS_USER=/etc/sudoers.d/$UNIX_USER
+  [ $SUDO_IDENTIFY -eq 2 ] && echo "$UNIX_USER ALL=(ALL) NOPASSWD: ALL" > $SYSTEM_SUDOERS_USER \
+  			&& chmod 440 $SYSTEM_SUDOERS_USER
+
+  [ -f "$DEF_SYSTEM_SUDOERS_USER" -a $LAB_SECURITY -ge 1 ] \
+    && mv $DEF_SYSTEM_SUDOERS_USER $SYSTEM_SUDOERS_USER \
+    && sed -i -e "s/^$DEF_USER/$UNIX_USER/g" $SYSTEM_SUDOERS_USER \
+    && chmod 440 $SYSTEM_SUDOERS_USER
+
+  chown $UNIX_USER:$UNIX_USER -R $HOME/
+
+  [ -d /usr/share/desktop/home/.config ] \
+    && sudo -u $UNIX_USER -i bash -c "cp -r /usr/share/desktop/home/{.[^.]*,*} /home/$UNIX_USER/" >/dev/null 2>&1
+
+  # Create password, ENV > CONF > PWGEN
+
+  do_unlock
+
+  [ -z "$UNIX_PWD" ] && get_var UNIX_PWD
+  [ -z "$VNC_PWD" ] && get_var VNC_PWD
+
+  [ -z "$PWD_LENGTH" ] && get_var PWD_LENGTH $DEF_PWD_LENGTH
+  [ -z "$PWD_TOTAL" ] && get_var PWD_TOTAL $DEF_PWD_TOTAL
+
+  PWGEN_OPTS="-B -s -n -v $PWD_LENGTH 1"
+  [ -z "$UNIX_PWD" ] && UNIX_PWD=`pwgen $PWGEN_OPTS | tr '[A-Z]' '[a-z]'`
+  [ -z "$VNC_PWD" ] && VNC_PWD=`pwgen $PWGEN_OPTS | tr '[A-Z]' '[a-z]'`
+  [ -z "$VNC_PWD_VIEWONLY" ] && VNC_PWD_VIEWONLY=`pwgen $PWGEN_OPTS | tr '[A-Z]' '[a-z]'`
+
+  [ -n "$UNIX_USER" ] && set_var UNIX_USER
+  [ -n "$UNIX_PWD" ] && set_var UNIX_PWD
+  [ -n "$VNC_PWD" ] && set_var VNC_PWD
+  [ -n "$VNC_PWD_VIEWONLY" ] && set_var VNC_PWD_VIEWONLY
+
+  # Sync UID between host and container
+  FILES_TO_SYN_PERM="$LAB_UNIX_PWD $LAB_VNC_PWD $LAB_VNC_PWD_VIEWONLY $LAB_UNIX_UID $LAB_UNIX_USER $LAB_VNC_IP $LAB_VNC_TOKEN"
+  sudo chown $UNIX_USER:$UNIX_USER $FILES_TO_SYN_PERM
+  sudo chmod a+w $FILES_TO_SYN_PERM
+
+  do_lock
+
+  # Don't touch me: otherwise, need to modify tools/docker/run
+  echo "User: $UNIX_USER ,Password: $UNIX_PWD ,VNC Password: $VNC_PWD ,Viewonly Password: $VNC_PWD_VIEWONLY"
+
+  SYSTEM_SUPERVISORD_CONF=/etc/supervisor/conf.d/x11vnc.conf
+  if [ "$UNIX_USER" != "$DEF_USER" ]; then
+    sed -i -e "s%$DEF_HOME%$HOME%g" $SYSTEM_SUPERVISORD_CONF
+    sed -i -e "s%user=$DEF_USER%user=$UNIX_USER%g" $SYSTEM_SUPERVISORD_CONF
+  fi
+
+  # VNC PASS
+  which x11vnc >/dev/null 2>&1
+  if [ $? -eq 0 ]; then
+    VNC_PWD_FILE=$HOME/.vnc/passwdfile
+    [ ! -d $HOME/.vnc ] && mkdir -p $HOME/.vnc
+    echo $VNC_PWD > $VNC_PWD_FILE
+    echo __BEGIN_VIEWONLY__ >> $VNC_PWD_FILE
+    echo $VNC_PWD_VIEWONLY >> $VNC_PWD_FILE
+
+    if [ $PWD_TOTAL -gt 0 ]; then
+      PWGEN_OPTS="-B -s -n -v $PWD_LENGTH $PWD_TOTAL"
+      pwgen $PWGEN_OPTS | tr ' ' '\n' >> $VNC_PWD_FILE
+    fi
+    chmod o-rwx $VNC_PWD_FILE
+
+    # Disable the VNC login password
+    get_var VNC_IDENTIFY 1
+    [ $VNC_IDENTIFY -eq 0 -a "x$HOST_NAME" = "xlocalhost" ] \
+       && sed -i -e "s% -usepw$%-nopw%g" $SYSTEM_SUPERVISORD_CONF
+  fi
+
+  # UNIX PASS
+  echo "$UNIX_USER:$UNIX_PWD" | chpasswd
+
+  # Forbit unix user login(no identify) by locking it, and unlock it for login available(identify)
+  [ $UNIX_IDENTIFY -eq 0 ] && passwd -l $UNIX_USER
+  [ $UNIX_IDENTIFY -eq 1 ] && passwd -u $UNIX_USER
+fi
+
+# mount tmpfs
+mount -t tmpfs none /tmp/
+
+# Run Lab specific tasks
+[ -x $LAB_CONTAINER_RUN ] && UNIX_USER=$UNIX_USER $LAB_CONTAINER_RUN
+
+# Run image built-in tasks
+for f in /etc/startup.aux/*.sh
+do
+    . $f
+done
+
+# Launch supervisor tasks
+
+SYSTEM_SUPERVISORD_CONF=/etc/supervisor/supervisord.conf
+/usr/bin/supervisord -n -c $SYSTEM_SUPERVISORD_CONF

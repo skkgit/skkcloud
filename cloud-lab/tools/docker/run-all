@@ -1,0 +1,12 @@
+#!/bin/sh
+#
+# run-all -- run all docker labs
+#
+
+TOP_DIR=$(cd $(dirname $0)/../../ && pwd)
+. $TOP_DIR/tools/docker/config $* >/dev/null
+
+for lab in $LABS
+do
+  $DOCKER_RUN_CMD $lab
+done

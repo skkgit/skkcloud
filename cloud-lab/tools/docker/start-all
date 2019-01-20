@@ -1,0 +1,38 @@
+#!/bin/sh
+#
+# start-all -- start all stopped docker lab
+#
+
+export RELEASE=0
+
+TOP_DIR=$(cd $(dirname $0)/../../ && pwd)
+. $TOP_DIR/tools/docker/config $* >/dev/null
+
+id_names=`docker ps -f status=exited --format='{{.ID}},{{.Names}}' | sed '1!G;h;$!d'`
+
+for id_name in $id_names
+do
+    id=$(echo $id_name | cut -d ',' -f1)
+    name=$(echo $id_name | cut -d ',' -f2)
+    lab=${name%-*}
+
+    lab=`echo $name | sed -e "s%-[0-9]*$%%g"`
+    echo $LABS $WPROXY_NAME $TPROXY_NAME | tr ' ' '\n' | grep -q ^$lab$
+    [ $? -ne 0 ] && continue
+
+    echo "Starting $name ..."
+
+    ls ${LAB_OUTPUT}/$name*/ >/dev/null 2>&1
+
+    if [ $? -eq 0 ]; then
+        ${LAB_OUTPUT}/$name*/tools/docker/start $lab
+    elif [ -d ${TOP_DIR}/configs/$lab ]; then
+        $DOCKER_START_CMD $lab
+    else
+        docker start $id
+    fi
+done
+
+sleep 5
+
+$DOCKER_RELEASE_CMD all >/dev/null 2>&1

@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# trun -- Run the docker image with in transparent proxy available environment
+#
+# Usage:
+#
+#    $ trun lab_name
+#
+
+TOP_DIR=$(cd $(dirname $0)/../../ && pwd)
+. $TOP_DIR/tools/docker/config $* >/dev/null
+
+# Configuration
+
+[ -z "$PROXY_SERVER" -o -z "$PROXY_PWD" ] \
+	&& echo "Error: Must configure PROXY_SERVER and PROXY_PWD." && exit 1
+
+[ -z "$ENCRYPT_CMD" ] && ENCRYPT_CMD=$DEF_ENCRYPT_CMD
+[ -z "$PROXY_LIMIT" ] && PROXY_LIMIT=0
+
+# Run
+
+PROXY_SERVER=$PROXY_SERVER \
+PROXY_PWD=$PROXY_PWD \
+ENCRYPT_CMD=$ENCRYPT_CMD \
+PROXY_LIMIT=$PROXY_LIMIT \
+TPROXY=1 \
+${TOP_DIR}/tools/docker/run $1

@@ -1,0 +1,35 @@
+#!/bin/sh
+#
+# IDENTIFY -- control the password of VNC/Unix/sudo login
+#
+# Usage: IDENTIFY 0|1 vnc|unix|sudo
+#
+
+TOP_DIR=$(cd $(dirname $0)/../../ && pwd)
+. $TOP_DIR/tools/docker/config $* >/dev/null
+
+IDENTIFY=$1
+ACCOUNT=$2
+
+[ -n "$1" -a "x$CURRENT" = "x$1" ] && IDENTIFY=$2 && ACCOUNT=$3
+[ -z "$ACCOUNT" ] && ACCOUNT=vnc
+
+do_unlock
+LAB_IDENTIFY=$CONFIG_DOCKER_DIR/.${ACCOUNT}_identify
+[ -z "$IDENTIFY" -a ! -f $LAB_IDENTIFY ] && IDENTIFY=1 && set_var IDENTIFY
+
+# Switch if no IDENTIFY argument pass
+if [ -z "$IDENTIFY" ]; then
+    get_var IDENTIFY 1
+    if [ -n "$IDENTIFY" -a "x$IDENTIFY" = "x1" ]; then
+        IDENTIFY=0
+    else
+        IDENTIFY=1
+    fi
+fi
+
+set_var IDENTIFY
+do_lock
+
+OP="Disable" && [ -n "$IDENTIFY" -a "x$IDENTIFY" = "x1" ] && OP="Enable"
+echo "LOG: ${OP} password of $ACCOUNT"

@@ -1,0 +1,13 @@
+#!/bin/sh
+#
+# stop -- stop a docker lab
+#
+
+TOP_DIR=$(cd $(dirname $0)/../../ && pwd)
+. $TOP_DIR/tools/docker/config $* >/dev/null
+
+notify_user 2 "Lab will be stopped"
+
+do_op "docker stop" CONTAINER_ID
+
+[ "$RELEASE" != '0' ] &&  $DOCKER_RELEASE_CMD all >/dev/null 2>&1

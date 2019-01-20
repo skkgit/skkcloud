@@ -1,0 +1,65 @@
+#!/bin/sh
+#
+# export -- export the vnc/ssh/webssh ports to internet
+#
+# Note: scripts/web-ubuntu.sh of https://github.com/tinyclub/cloud-ubuntu
+#
+
+TOP_DIR=$(cd $(dirname $0)/../../ && pwd)
+. $TOP_DIR/tools/docker/config $* >/dev/null
+
+IMAGE_NAME=tinylab/$WPROXY_NAME
+
+[ -z "$PULL" ] && PULL=0
+
+docker images | grep -q $IMAGE_NAME
+[ $? -ne 0 -o $PULL -eq 1 ] && docker pull $IMAGE_NAME
+
+DEFAULT_PORT_MAP=" -p $HOST_VNC_PORT:$CONTAINER_VNC_PORT -p $HOST_SSH_PORT:$CONTAINER_SSH_PORT -p $HOST_WEBSSH_PORT:$CONTAINER_WEBSSH_PORT "
+
+# Available encrypt cmds: sha1sum, sha224sum, cksum, sha256sum, sha512sum, md5sum, sha384sum, sum
+# To enable auto timeout, please pass VNC_TIMEOUT=1
+[ -z "$VNC_TIMEOUT" ] && VNC_TIMEOUT=0
+[ -z "$VNC_AUTH" ] && VNC_AUTH=""
+[ -z "$PROXY_LIMIT" ] && PROXY_LIMIT=0
+[ -z "$ENCRYPT_CMD" ] && ENCRYPT_CMD="cat"
+[ -z "$UNIX_PWD" ] && UNIX_PWD=`get_random_pwd`
+[ -z "$VNC_PWD" ] && VNC_PWD=`get_random_pwd`
+[ -n "$UNIX_PWD" ] && UNIX_PWD=`echo $UNIX_PWD | tr -d '\n' | $ENCRYPT_CMD | cut -d' ' -f1`
+[ -n "$VNC_PWD" ] && VNC_PWD=`echo $VNC_PWD | tr -d '\n' | $ENCRYPT_CMD | cut -d' ' -f1`
+
+[ -z "$TOKEN_LENGTH" ] && TOKEN_LENGTH=$DEF_TOKEN_LENGTH
+[ -z "$HOST_NAME" ] && HOST_NAME=localhost
+[ -z "$PORT_MAP" ] && PORT_MAP="$DEFAULT_PORT_MAP"
+[ -z "$ENV_ARGS" ] && ENV_ARGS=" -e VNC_TIMEOUT=$VNC_TIMEOUT -e VNC_AUTH=$VNC_AUTH -e UNIX_PWD=$UNIX_PWD -e VNC_PWD=$VNC_PWD -e SCREEN_SIZE=$SCREEN_SIZE -e PROXY_LIMIT=$PROXY_LIMIT -e NOSSL=$WEB_NOSSL -e ENCRYPT_CMD=$ENCRYPT_CMD"
+[ -z "$EXTRA_ARGS" ] && EXTRA_ARGS=""
+
+# Mount a directory for storing the noVNC recording sessions
+[ -z "$VNC_RECORDINGS" ] && VNC_RECORDINGS=recordings
+[ -z "$VNC_RELEASINGS" ] && VNC_RELEASINGS=labs
+[ -z "$VNC_TOKEN_DIR" ] && VNC_TOKENS=.vnc-tokens
+CONTAINER_RECORD_DIR=/noVNC/$VNC_RECORDINGS
+CONTAINER_RELEASE_DIR=/noVNC/$VNC_RELEASINGS
+CONTAINER_TOKEN_DIR=/$VNC_TOKENS
+
+HOST_RECORD_DIR=${TOP_RECORD_DIR}/$DEF_RECORD_DIR
+[ ! -d $HOST_RECORD_DIR ] && mkdir -p $HOST_RECORD_DIR
+
+HOST_RELEASE_DIR=${TOP_RELEASE_DIR}/$DEF_RELEASE_DIR
+[ ! -d $HOST_RELEASE_DIR ] && mkdir -p $HOST_RELEASE_DIR
+
+HOST_TOKEN_DIR=${TOP_TOKEN_DIR}/$DEF_TOKEN_DIR
+
+VOLUME_MAP=" -v $HOST_RECORD_DIR:$CONTAINER_RECORD_DIR"
+echo "LOG: VNC screen recorded in $HOST_RECORD_DIR"
+ 
+VOLUME_MAP="$VOLUME_MAP -v $HOST_RELEASE_DIR:$CONTAINER_RELEASE_DIR "
+echo "LOG: VNC pages released in $HOST_RELEASE_DIR"
+
+VOLUME_MAP="$VOLUME_MAP -v $HOST_TOKEN_DIR:$CONTAINER_TOKEN_DIR"
+echo "LOG: VNC tokens stored in $HOST_TOKEN_DIR"
+
+docker run \
+	--name $WPROXY_NAME --privileged -d -t \
+	$PORT_MAP $VOLUME_MAP $ENV_ARGS $WPROXY_LIMITS $EXTRA_ARGS \
+	-h $HOST_NAME $IMAGE_NAME

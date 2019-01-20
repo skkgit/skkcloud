@@ -1,0 +1,146 @@
+#!/bin/sh
+#
+# run -- Run the docker image of the lab
+#
+
+TOP_DIR=$(cd $(dirname $0)/../../ && pwd)
+. $TOP_DIR/tools/docker/config $* >/dev/null
+
+# Start the transparent proxy via tinylab/cloud-ubuntu-proxy_client_transparent container
+(docker ps -f name=$TPROXY_NAME -f status=exited | grep -q -v PORTS) \
+  && echo "LOG: Resume the stopped $TPROXY_NAME" \
+  && docker start `docker ps -f name=$TPROXY_NAME -f status=exited -q`
+
+(docker ps -f name=$TPROXY_NAME | grep -q -v PORTS)
+  [ $? -ne 0 -a $TPROXY -eq 1 -a -n "$PROXY_SERVER" -a -n "$PROXY_PWD" -a -n "$ENCRYPT_CMD" ] \
+  && echo "LOG: Start $TPROXY_NAME" \
+  && PROXY_SERVER=$PROXY_SERVER PROXY_PWD=$PROXY_PWD ENCRYPT_CMD=$ENCRYPT_CMD PROXY_LIMIT=$PROXY_LIMIT $DOCKER_TPROXY_CMD $*
+
+if [ $TPROXY -eq 1 ]; then
+  TPROXY_IP=`docker inspect --format '{{ .NetworkSettings.IPAddress }}' $TPROXY_NAME`
+  do_unlock
+  set_var TPROXY_IP
+  do_lock
+fi
+
+# Start the ssh/vnc proxy via tinylab/cloud-ubuntu-web container
+(docker ps -f name=$WPROXY_NAME -f status=exited | grep -q -v PORTS) \
+  && echo "LOG: Resume the stopped $WPROXY_NAME" \
+  && docker start `docker ps -f name=$WPROXY_NAME -f status=exited -q`
+
+(docker ps -f name=$WPROXY_NAME | grep -q -v PORTS) || \
+  (echo "LOG: Start $WPROXY_NAME" \
+  && touch_token_map \
+  && $DOCKER_EXPORT_CMD $*)
+
+if [ -n "$CONTAINER_ID" ]; then
+  # If already there and running, open it
+  (docker ps -f id=$CONTAINER_ID | grep -q -v PORTS) \
+    && echo "LOG: Open the running $LAB_NAME" \
+    && $DOCKER_VNC_CMD $* \
+    && exit 0
+
+  # If already there and stopped, start and open it
+  (docker ps -f id=$CONTAINER_ID -f status=exited | grep -q -v PORTS) \
+    && echo "LOG: Resume the stopped $LAB_NAME" \
+    && $DOCKER_START_CMD $LAB_NAME \
+    && echo "LOG: Wait for lab resuming..." \
+    && while :; do \
+       pass=`docker logs $CONTAINER_ID 2>/dev/null | grep Password`; \
+       sleep 2; \
+       [ -n "$pass" ] && break; done \
+    && $DOCKER_VNC_CMD $* \
+    && exit 0
+fi
+
+# Generate an unique container name
+if [ -z "$CONTAINER_NAME" ]; then
+  while :;
+  do
+    CONTAINER_NAME=${LAB_NAME}-`get_random`
+    exist=`docker ps -q --filter=name=$CONTAINER_NAME | wc -l`
+    [ $exist -eq 0 ] && break
+  done
+fi
+
+# Require to prepare some environment for docker containers in host
+[ -f $LAB_HOST_RUN ] && $LAB_HOST_RUN
+
+# Run the lab via start a lab container
+caps=""
+devs=""
+vars="-e LAB_SECURITY=$LAB_SECURITY"
+envs=""
+volumemap="-v $GIT_DIR:$GIT_WORKDIR"
+volumemap="$volumemap -v $LAB_DIR:$LAB_WORKDIR"
+volumemap="$volumemap -v $TOOL_DIR:$TOOL_WORKDIR"
+volumemap="$volumemap -v $CONFIG_DIR:$CONFIG_WORKDIR"
+limits=$LIMITS
+
+# Get a new ip for our new container
+[ -z "$RANDOM_IP" ] && RANDOM_IP=0
+if [ "x$HOST_OS" = "xLinux" -a $RANDOM_IP -eq 1 ]; then
+  if [ -z "$VNC_IP" -o "$VNC_IP" = "$DEF_VNC_IP" ]; then
+    VNC_IP=`$DOCKER_IP_CMD`
+    [ $? -ne 0 ] && echo "LOG: $DOCKER_IP_CMD: get ip address error." && exit 1
+  fi
+fi
+
+for var in $VARS; do
+    __ENCRYPT_CMD="cat"
+    # Available encrypt cmds: sha1sum, sha224sum, cksum, sha256sum, sha512sum, md5sum, sha384sum, sum
+    value=$(eval echo \$${var})
+    echo "$var" | grep -q "_PWD"
+    [ $? -eq 0 -a -n "$ENCRYPT" -a -n "$ENCRYPT_CMD" -a -n "$value" ] && __ENCRYPT_CMD=$ENCRYPT_CMD
+    vars="$vars -e $var=$(echo $value | tr -d '\n' | $__ENCRYPT_CMD | cut -d' ' -f1)";
+done
+for env in $ENVS; do vars="$vars -e $env"; done
+for cap in $CAPS; do caps="$caps --cap-add $cap"; done
+for dev in $DEVICES; do devs="$devs --device $dev"; done
+for map in $PORTMAP; do portmap="$portmap -p $map"; done
+for map in $VOLUMEMAP; do volumemap="$volumemap -v $map"; done
+
+container="--name $CONTAINER_NAME"
+
+# Sync UID before running
+UNIX_UID=`id -u $HOST_USER`
+[ "x$UNIX_UID" = "x0" -o -z "$UNIX_UID" ] && UNIX_UID=1000
+
+do_unlock
+set_var UNIX_UID
+do_lock
+
+CONTAINER_ID=$(docker run -d --privileged $container $portmap $caps $devices $limits $volumemap $vars $EXTRA_ARGS $IMAGE)
+
+[ $? -ne 0 ] && echo "LOG: docker running error." && exit 1
+
+CONTAINER_ID=`echo $CONTAINER_ID | cut -c-12`
+
+trap 'echo "  Please wait for a while, to really stop me, please fire: kill -9 $$"' 2
+
+echo "LOG: Wait for lab launching..."
+while :; do
+    password=`docker logs $CONTAINER_ID 2>/dev/null | grep Password`
+    sleep 2
+    [ -n "$password" ] && break
+done
+
+do_unlock
+
+# Save the lab's information (for restore the container for 'docker start')
+vars="$LAB_VARS"
+for var in $vars; do set_var $var; done
+
+do_lock
+
+trap 'exit 0' 2
+
+echo "LOG: Container ID: ${CONTAINER_ID} Container Name: ${CONTAINER_NAME}"
+echo "LOG: $password"
+
+# Publish vnc port
+$DOCKER_PUBLISH_CMD $*
+
+$DOCKER_VNC_CMD $*
+
+$DOCKER_RELEASE_CMD all

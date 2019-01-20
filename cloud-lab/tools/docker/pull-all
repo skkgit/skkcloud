@@ -1,0 +1,12 @@
+#!/bin/sh
+#
+# pull-all -- pull the docker images from docker hub
+#
+
+TOP_DIR=$(cd $(dirname $0)/../../ && pwd)
+. $TOP_DIR/tools/docker/config $* >/dev/null
+
+for IMAGE in $IMAGES
+do
+    do_op "docker pull" IMAGE
+done

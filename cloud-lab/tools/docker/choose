@@ -1,0 +1,70 @@
+#!/bin/sh
+#
+# choose -- Choose a lab
+#
+
+NEW_LAB=$1
+
+TOP_DIR=$(cd $(dirname $0)/../../ && pwd)
+. $TOP_DIR/tools/docker/config $* >/dev/null
+OLD_LAB=$CURRENT
+
+[ -z "$PULL" ] && PULL=1
+
+[ -z "$SUBMODULE" ] && SUBMODULE=1
+[ -z "$DEPTH" ] && DEPTH=2
+
+download_submodule ()
+{
+    LAB_CURRENT_DIR=$LAB_DIR/$CURRENT
+    LAB_LABS=$CONFIG_DIR/labs
+    get_var LABS $CURRENT
+
+    for lab in $LABS; do
+      LAB_CURRENT_DIR=$LAB_DIR/$lab
+      [ $SUBMODULE -eq 1 ] && \
+	RECURSIVE=" --recursive --depth $DEPTH" && \
+	PULL_RECURSIVE=" --recurse-submodules=yes --depth=$DEPTH"
+
+      [ ! -f $LAB_CURRENT_DIR/.git ] \
+        && git submodule update --init --remote $RECURSIVE $LAB_CURRENT_DIR
+
+      cd $LAB_CURRENT_DIR && git checkout master
+
+      [ $SUBMODULE -eq 1 ] && echo "LOG: Pulling submodules of $lab" \
+	&& git submodule update --init --remote $RECURSIVE .
+      [ $PULL -eq 1 ] && echo "LOG: Pulling repository: $lab" && git pull $PULL_RECURSIVE -v
+
+      # Convert absolute path to relative path for gitdir in .git of submodules
+      [ $SUBMODULE -eq 1 ] && \
+        git submodule foreach --recursive '[ -f .git ] && gitdir=$(cut -d" " -f2 .git) && (echo $gitdir | grep -q ^/) && dir=$(echo $gitdir | sed -e 's%$TOP_DIR/%%') && relpath=$(echo $PWD | sed -e 's%$TOP_DIR%%g' | tr -c -d '/' | sed -e 's%/%../%g') && echo "gitdir: $(echo $relpath)$dir" > .git || :'
+
+      echo "LOG: Source code downloaded to $LAB_CURRENT_DIR"
+    done
+}
+
+if [ -n "$NEW_LAB" ]; then
+    . $TOP_DIR/tools/docker/config $NEW_LAB >/dev/null
+
+    set_var CURRENT
+
+    [ -n "$OLD_LAB" -a "$OLD_LAB" != "$CURRENT" ] && echo "LOG: Switch from $OLD_LAB to $CURRENT"
+    download_submodule && exit 0
+fi
+
+echo "LOG: Available Labs:\n"
+echo $LABS | tr ' ' '\n' | cat -n
+echo ""
+
+read -p 'LOG: Choose the lab number: ' number
+
+CURRENT=`echo $LABS | tr ' ' '\n' | head -$number | tail -1`
+
+echo "\n     $number\t$CURRENT\n"
+
+set_var CURRENT
+
+echo "\nLOG: Download the lab...\n"
+
+# Clone the submodule
+download_submodule
